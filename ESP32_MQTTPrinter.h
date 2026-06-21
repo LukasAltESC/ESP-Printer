@@ -13,25 +13,25 @@ const char* WIFI_PASSWORD = "DEIN_WLAN_PASSWORT";
 
 // MQTT-Broker
 // Bei dir wahrscheinlich: homeassistant.local
+// Falls es Probleme gibt, hier die feste IP von Home Assistant eintragen.
 const char* MQTT_HOST = "homeassistant.local";
 
 // Standard-Port vom Mosquitto Broker ist meistens 1883
 const uint16_t MQTT_PORT = 1883;
 
 // MQTT-Login
-// Benutzer hast du bereits angelegt: mqtt_printer
 const char* MQTT_USER     = "mqtt_printer";
 const char* MQTT_PASSWORD = "DEIN_MQTT_PASSWORT";
 
 // MQTT Client-ID.
-// Sollte eindeutig im MQTT-Netz sein.
+// Muss im MQTT-Netz eindeutig sein.
 const char* MQTT_CLIENT_ID = "qr701_esp32_printer";
 
 // ============================================================
 // MQTT TOPICS
 // ============================================================
 
-// Über dieses Topic kann Home Assistant normalen Text drucken lassen
+// Normalen Text drucken
 const char* TOPIC_PRINT_TEXT = "qr701/print/text";
 
 // Testdruck auslösen
@@ -43,6 +43,10 @@ const char* TOPIC_CMD_FEED = "qr701/cmd/feed";
 // Drucker initialisieren
 const char* TOPIC_CMD_INIT = "qr701/cmd/init";
 
+// Daily-ToDo formatiert drucken
+// Payload ist normaler mehrzeiliger Text.
+const char* TOPIC_PRINT_TODO = "qr701/print/todo";
+
 // Statusmeldung des ESP32
 const char* TOPIC_STATUS = "qr701/status";
 
@@ -51,15 +55,13 @@ const char* TOPIC_STATUS = "qr701/status";
 // ============================================================
 
 // Deine funktionierende Verdrahtung:
-// ESP32 GPIO16 = RX2
-// ESP32 GPIO17 = TX2
-static const int PRINTER_RX = 16;
-static const int PRINTER_TX = 17;
+static const int PRINTER_RX = 16; // ESP32 RX2
+static const int PRINTER_TX = 17; // ESP32 TX2
 
-// QR701 laut Testdruck: 9600 Baud, RS232
+// QR701 laut Testdruck: 9600 Baud
 static const uint32_t PRINTER_BAUD = 9600;
 
-// HardwareSerial UART2 vom ESP32 verwenden
+// UART2 vom ESP32 verwenden
 HardwareSerial Printer(2);
 
 // ============================================================
@@ -70,22 +72,38 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
 // ============================================================
-// HILFSFUNKTION: Text für den Drucker vereinfachen
+// Text für den QR701 vereinfachen
 // ============================================================
-// Dein Drucker steht laut Testdruck auf PC936 / GB18030.
-// Damit deutsche Umlaute nicht als Müll gedruckt werden,
-// ersetzen wir sie erstmal bewusst durch ae, oe, ue, ss.
-// Das ist robust und für ToDo-Listen gut lesbar.
+// Dein Drucker bleibt offenbar im PC936 / GB18030-Modus.
+// Damit deutsche Zeichen nicht als asiatische Zeichen gedruckt werden,
+// ersetzen wir Umlaute durch ASCII-Schreibweisen.
+//
+// Beispiel:
+//   Öl prüfen  ->  Oel pruefen
+//   Grüße      ->  Gruesse
+// ============================================================
 
 String normalizeTextForPrinter(String text) {
   text.replace("ä", "ae");
   text.replace("ö", "oe");
   text.replace("ü", "ue");
+
   text.replace("Ä", "Ae");
   text.replace("Ö", "Oe");
   text.replace("Ü", "Ue");
+
   text.replace("ß", "ss");
   text.replace("€", "EUR");
+
+  // Typografische Zeichen aus Notion/Smartphones entschärfen
+  text.replace("–", "-");
+  text.replace("—", "-");
+  text.replace("„", "\"");
+  text.replace("“", "\"");
+  text.replace("”", "\"");
+  text.replace("’", "'");
+  text.replace("‘", "'");
+  text.replace("…", "...");
 
   return text;
 }
@@ -93,11 +111,13 @@ String normalizeTextForPrinter(String text) {
 // ============================================================
 // ESC/POS: Drucker initialisieren
 // ============================================================
-// ESC @ setzt viele Druckereinstellungen auf Standard zurück.
+// ESC @ setzt viele Druckereinstellungen zurück.
+// Danach arbeiten wir bewusst mit einfachem ASCII-Text.
+// ============================================================
 
 void printerInit() {
   Printer.write(0x1B); // ESC
-  Printer.write('@');  // Initialisieren
+  Printer.write('@');  // Init
   delay(100);
 }
 
@@ -124,7 +144,7 @@ void printerBold(bool enabled) {
 
 // ============================================================
 // ESC/POS: Schriftgröße setzen
-// size = 0 normal
+// size = 0x00 normal
 // size = 0x11 doppelte Breite und doppelte Höhe
 // ============================================================
 
@@ -145,21 +165,120 @@ void printerFeed(uint8_t lines) {
 }
 
 // ============================================================
+// Hilfsfunktion: Trennlinie drucken
+// ============================================================
+// Bei 58-mm-Druckern sind je nach Font etwa 32 Zeichen pro Zeile gut.
+// ============================================================
+
+void printerLine() {
+  Printer.println("--------------------------------");
+}
+
+// ============================================================
+// Hilfsfunktion: Normalisierten Text drucken
+// ============================================================
+
+void printerPrintNormalized(String text) {
+  text = normalizeTextForPrinter(text);
+  Printer.print(text);
+}
+
+void printerPrintlnNormalized(String text) {
+  text = normalizeTextForPrinter(text);
+  Printer.println(text);
+}
+
+// ============================================================
 // Einen normalen Textblock drucken
 // ============================================================
 
 void printPlainText(String text) {
-  text = normalizeTextForPrinter(text);
-
   printerInit();
+
   printerAlign(0);
   printerBold(false);
   printerTextSize(0x00);
+
+  text = normalizeTextForPrinter(text);
 
   Printer.println(text);
 
   // Am Ende ein paar Zeilen vorschieben,
   // damit man den Ausdruck sauber abreißen kann.
+  printerFeed(4);
+}
+
+// ============================================================
+// Daily-ToDo formatiert drucken
+// ============================================================
+// Payload-Beispiel per MQTT:
+//
+// Einkaufen
+// Ölstand prüfen
+// E-Mails beantworten
+//
+// Der ESP32 macht daraus:
+//
+// DAILY TODO
+// 21.06.2026 wird später von Home Assistant im Text mitgegeben
+// --------------------------------
+// [ ] Einkaufen
+// [ ] Oelstand pruefen
+// [ ] E-Mails beantworten
+// ============================================================
+
+void printTodoList(String payload) {
+  payload = normalizeTextForPrinter(payload);
+
+  printerInit();
+
+  // Kopf
+  printerAlign(1);
+  printerBold(true);
+  printerTextSize(0x11);
+  Printer.println("DAILY");
+  Printer.println("TODO");
+
+  printerTextSize(0x00);
+  printerBold(false);
+  Printer.println();
+
+  printerAlign(0);
+  printerLine();
+
+  // Jede Zeile aus dem Payload als ToDo-Zeile drucken.
+  // Leere Zeilen werden ignoriert.
+  int start = 0;
+
+  while (start < payload.length()) {
+    int end = payload.indexOf('\n', start);
+
+    if (end == -1) {
+      end = payload.length();
+    }
+
+    String line = payload.substring(start, end);
+    line.trim();
+
+    if (line.length() > 0) {
+      // Falls Home Assistant schon Checkboxen mitsendet, nicht doppeln.
+      if (line.startsWith("[ ]") || line.startsWith("[x]") || line.startsWith("[X]")) {
+        Printer.println(line);
+      } else {
+        Printer.print("[ ] ");
+        Printer.println(line);
+      }
+    }
+
+    start = end + 1;
+  }
+
+  printerLine();
+  Printer.println();
+
+  printerAlign(1);
+  Printer.println("Gedruckt via Home Assistant");
+
   printerFeed(4);
 }
 
@@ -171,37 +290,46 @@ void printTestPage() {
   printerInit();
 
   // Überschrift
-  printerAlign(1);       // zentriert
-  printerBold(true);     // fett
-  printerTextSize(0x11); // groß
+  printerAlign(1);
+  printerBold(true);
+  printerTextSize(0x11);
   Printer.println("QR701");
   Printer.println("MQTT Test");
 
-  // Normaler Text
   printerTextSize(0x00);
   printerBold(false);
   Printer.println();
 
-  printerAlign(0); // links
-  Printer.println("------------------------");
+  printerAlign(0);
+  printerLine();
   Printer.println("ESP32 + MAX3232");
   Printer.println("Home Assistant MQTT");
   Printer.println("Baudrate: 9600");
+  printerLine();
   Printer.println();
 
   printerBold(true);
-  Printer.println("Befehle:");
+  Printer.println("Topics:");
   printerBold(false);
 
   Printer.println("qr701/print/text");
+  Printer.println("qr701/print/todo");
   Printer.println("qr701/cmd/test");
   Printer.println("qr701/cmd/feed");
   Printer.println("qr701/cmd/init");
   Printer.println();
 
-  Printer.println("Umlaute:");
-  Printer.println(normalizeTextForPrinter("ae oe ue ss"));
-  Printer.println(normalizeTextForPrinter("ä ö ü ß"));
+  printerBold(true);
+  Printer.println("Umlaut-Ersatz:");
+  printerBold(false);
+
+  printerPrintlnNormalized("ä -> ae, ö -> oe, ü -> ue");
+  printerPrintlnNormalized("Ä -> Ae, Ö -> Oe, Ü -> Ue");
+  printerPrintlnNormalized("ß -> ss, € -> EUR");
+  Printer.println();
+
+  printerPrintlnNormalized("Beispiel: Öl prüfen");
+  printerPrintlnNormalized("Beispiel: Grüße vom Prüfstand");
 
   printerFeed(4);
 }
@@ -211,6 +339,7 @@ void printTestPage() {
 // ============================================================
 // retain=true sorgt dafür, dass Home Assistant den letzten Status
 // auch nach Neustart noch sehen kann.
+// ============================================================
 
 void publishStatus(const char* statusText) {
   mqttClient.publish(TOPIC_STATUS, statusText, true);
@@ -237,13 +366,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Payload: ");
   Serial.println(message);
 
-  // Topic auswerten
   String topicString = String(topic);
 
   if (topicString == TOPIC_PRINT_TEXT) {
-    Serial.println("Drucke Text...");
+    Serial.println("Drucke normalen Text...");
     printPlainText(message);
     publishStatus("printed_text");
+  }
+  else if (topicString == TOPIC_PRINT_TODO) {
+    Serial.println("Drucke Daily-ToDo...");
+    printTodoList(message);
+    publishStatus("printed_todo");
   }
   else if (topicString == TOPIC_CMD_TEST) {
     Serial.println("Drucke Testseite...");
@@ -287,7 +420,6 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  // Warten bis WLAN verbunden ist
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -304,7 +436,6 @@ void connectWiFi() {
 // ============================================================
 
 void connectMQTT() {
-  // Solange versuchen, bis MQTT verbunden ist
   while (!mqttClient.connected()) {
     Serial.println();
     Serial.print("Verbinde mit MQTT Broker: ");
@@ -327,17 +458,17 @@ void connectMQTT() {
     if (connected) {
       Serial.println("MQTT verbunden.");
 
-      // Status online setzen
       publishStatus("online");
 
-      // Topics abonnieren
       mqttClient.subscribe(TOPIC_PRINT_TEXT);
+      mqttClient.subscribe(TOPIC_PRINT_TODO);
       mqttClient.subscribe(TOPIC_CMD_TEST);
       mqttClient.subscribe(TOPIC_CMD_FEED);
       mqttClient.subscribe(TOPIC_CMD_INIT);
 
       Serial.println("MQTT Topics abonniert:");
       Serial.println(TOPIC_PRINT_TEXT);
+      Serial.println(TOPIC_PRINT_TODO);
       Serial.println(TOPIC_CMD_TEST);
       Serial.println(TOPIC_CMD_FEED);
       Serial.println(TOPIC_CMD_INIT);
@@ -377,8 +508,7 @@ void setup() {
   mqttClient.setCallback(mqttCallback);
 
   // Größere MQTT-Nachrichten erlauben.
-  // PubSubClient ist standardmäßig eher klein eingestellt.
-  // 2048 reicht für einfache ToDo-Listen.
+  // 2048 reicht für normale ToDo-Listen.
   mqttClient.setBufferSize(2048);
 
   // MQTT verbinden
@@ -390,21 +520,18 @@ void setup() {
 // ============================================================
 // LOOP
 // Läuft dauerhaft.
-// Hier wird die MQTT-Verbindung am Leben gehalten.
+// Hier wird WLAN/MQTT am Leben gehalten.
 // ============================================================
 
 void loop() {
-  // Falls WLAN getrennt wurde, neu verbinden
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WLAN getrennt. Verbinde neu...");
     connectWiFi();
   }
 
-  // Falls MQTT getrennt wurde, neu verbinden
   if (!mqttClient.connected()) {
     connectMQTT();
   }
 
-  // MQTT-Nachrichten verarbeiten
   mqttClient.loop();
 }
