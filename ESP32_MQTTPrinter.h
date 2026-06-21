@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <time.h>
 
 // ============================================================
 // BENUTZER-EINSTELLUNGEN
@@ -12,12 +11,9 @@ const char* WIFI_SSID     = "DEINE_WLAN_SSID";
 const char* WIFI_PASSWORD = "DEIN_WLAN_PASSWORT";
 
 // Netzwerkname des ESP32
-// Bindestriche sind besser als Unterstriche.
 const char* DEVICE_HOSTNAME = "ESP32-QR701-Printer";
 
 // MQTT-Broker
-// Bei dir wahrscheinlich: homeassistant.local
-// Falls es Probleme gibt, hier die feste IP von Home Assistant eintragen.
 const char* MQTT_HOST = "homeassistant.local";
 
 // Standard-Port Mosquitto
@@ -55,8 +51,19 @@ static const int PRINTER_TX = 17;
 // QR701 laut Testdruck
 static const uint32_t PRINTER_BAUD = 9600;
 
-// Kleine originale Checkbox
-const char* TODO_CHECKBOX = "[ ] ";
+// 58-mm-Drucker, normaler Font: ca. 32 Zeichen pro Zeile
+static const int PRINT_WIDTH = 32;
+
+// ToDo-Zeilenabstand.
+// Standard ist ungefähr 30. 60 ist etwa doppelt so luftig.
+static const uint8_t TODO_LINE_SPACING = 60;
+
+// Der Text soll bei Zeilenumbruch nicht unter dem Kästchen starten.
+// Das echte Kästchen ist ungefähr 2 Zeichen breit plus Leerzeichen.
+static const int TODO_TEXT_START_COL = 3;
+
+// Fallback-Checkbox, falls echtes Kästchen später nicht passt
+const char* TODO_CHECKBOX_FALLBACK = "[ ] ";
 
 // UART2 vom ESP32
 HardwareSerial Printer(2);
@@ -96,7 +103,7 @@ String normalizeTextForPrinter(String text) {
   text.replace("‘", "'");
   text.replace("…", "...");
 
-  // Nicht druckbare Steuerzeichen entschärfen, aber Zeilenumbrüche erhalten
+  // CR entfernen, LF behalten
   text.replace("\r", "");
 
   return text;
@@ -139,14 +146,33 @@ void printerFeed(uint8_t lines) {
   Printer.write(lines);
 }
 
-void printerLine() {
-  Printer.println("--------------------------------");
+void printerLineSpacing(uint8_t spacing) {
+  // ESC 3 n = Zeilenabstand setzen
+  Printer.write(0x1B);
+  Printer.write('3');
+  Printer.write(spacing);
+}
+
+void printerLineSpacingDefault() {
+  // ESC 2 = Standard-Zeilenabstand
+  Printer.write(0x1B);
+  Printer.write('2');
 }
 
 void printerResetTextStyle() {
   printerTextSize(0x00);
   printerBold(false);
   printerAlign(0);
+}
+
+void printerLine() {
+  Printer.println("--------------------------------");
+}
+
+void printerPrintSpaces(uint8_t count) {
+  for (uint8_t i = 0; i < count; i++) {
+    Printer.print(" ");
+  }
 }
 
 void printerPrintNormalized(String text) {
@@ -160,97 +186,26 @@ void printerPrintlnNormalized(String text) {
 }
 
 // ============================================================
-// ZEIT / DATUM
-// ============================================================
-
-void setupTime() {
-  Serial.println("Synchronisiere Uhrzeit per NTP...");
-
-  // Deutschland: automatische Sommer-/Winterzeit
-  configTzTime(
-    "CET-1CEST,M3.5.0/2,M10.5.0/3",
-    "pool.ntp.org",
-    "time.nist.gov"
-  );
-
-  struct tm timeinfo;
-
-  for (int i = 0; i < 20; i++) {
-    if (getLocalTime(&timeinfo)) {
-      Serial.println("Uhrzeit synchronisiert.");
-      Serial.printf(
-        "Aktuelle Zeit: %02d.%02d.%04d %02d:%02d:%02d\n",
-        timeinfo.tm_mday,
-        timeinfo.tm_mon + 1,
-        timeinfo.tm_year + 1900,
-        timeinfo.tm_hour,
-        timeinfo.tm_min,
-        timeinfo.tm_sec
-      );
-      return;
-    }
-
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("Warnung: Uhrzeit konnte nicht synchronisiert werden.");
-}
-
-String getGermanDateTimeLine() {
-  struct tm timeinfo;
-
-  if (!getLocalTime(&timeinfo)) {
-    return "Datum/Zeit unbekannt";
-  }
-
-  const char* weekdays[] = {
-    "Sonntag",
-    "Montag",
-    "Dienstag",
-    "Mittwoch",
-    "Donnerstag",
-    "Freitag",
-    "Samstag"
-  };
-
-  char buffer[64];
-
-  snprintf(
-    buffer,
-    sizeof(buffer),
-    "%s, den %02d.%02d.%02d %02d:%02d Uhr",
-    weekdays[timeinfo.tm_wday],
-    timeinfo.tm_mday,
-    timeinfo.tm_mon + 1,
-    (timeinfo.tm_year + 1900) % 100,
-    timeinfo.tm_hour,
-    timeinfo.tm_min
-  );
-
-  return String(buffer);
-}
-
-// ============================================================
 // NORMALER TEXTDRUCK
 // ============================================================
 
 void printPlainText(String text) {
   printerInit();
   printerResetTextStyle();
+  printerLineSpacingDefault();
 
   text = normalizeTextForPrinter(text);
   Printer.println(text);
 
   printerResetTextStyle();
+  printerLineSpacingDefault();
   printerFeed(4);
 }
 
 // ============================================================
 // FORMATIERTER TEXTDRUCK
 // ============================================================
-// Unterstützte Steuerbefehle im Payload:
+// Unterstützte Steuerbefehle:
 //
 // #LEFT
 // #CENTER
@@ -260,10 +215,9 @@ void printPlainText(String text) {
 // #SIZE_NORMAL
 // #SIZE_BIG
 // #LINE
-// #DATETIME
 // #FEED 4
-//
-// Alles andere wird normal gedruckt.
+// #LINE_SPACING 60
+// #LINE_SPACING_DEFAULT
 
 void executeFormattedCommand(String line) {
   line.trim();
@@ -292,9 +246,6 @@ void executeFormattedCommand(String line) {
   else if (line == "#LINE") {
     printerLine();
   }
-  else if (line == "#DATETIME") {
-    Printer.println(getGermanDateTimeLine());
-  }
   else if (line.startsWith("#FEED")) {
     int spacePos = line.indexOf(' ');
     int lines = 4;
@@ -313,6 +264,27 @@ void executeFormattedCommand(String line) {
 
     printerFeed((uint8_t)lines);
   }
+  else if (line.startsWith("#LINE_SPACING")) {
+    int spacePos = line.indexOf(' ');
+    int spacing = 30;
+
+    if (spacePos > 0) {
+      spacing = line.substring(spacePos + 1).toInt();
+    }
+
+    if (spacing < 16) {
+      spacing = 16;
+    }
+
+    if (spacing > 100) {
+      spacing = 100;
+    }
+
+    printerLineSpacing((uint8_t)spacing);
+  }
+  else if (line == "#LINE_SPACING_DEFAULT") {
+    printerLineSpacingDefault();
+  }
 }
 
 void printFormattedText(String payload) {
@@ -320,6 +292,7 @@ void printFormattedText(String payload) {
 
   printerInit();
   printerResetTextStyle();
+  printerLineSpacingDefault();
 
   int start = 0;
 
@@ -343,7 +316,89 @@ void printFormattedText(String payload) {
   }
 
   printerResetTextStyle();
+  printerLineSpacingDefault();
   printerFeed(4);
+}
+
+// ============================================================
+// TODO-CHECKBOX UND ZEILENUMBRUCH
+// ============================================================
+
+void printerTodoCheckbox(bool done) {
+  if (done) {
+    // Erledigte Aufgaben erstmal sicher als [x].
+    // Ein echtes abgehaktes Kästchen können wir später grafisch machen.
+    Printer.print("[x] ");
+  } else {
+    // Versuch: echtes leeres Kästchen "□" über GB2312/GBK/PC936.
+    // Falls dein QR701 hier etwas Falsches druckt, stellen wir auf Fallback um.
+    Printer.write((uint8_t)0xA1);
+    Printer.write((uint8_t)0xF5);
+    Printer.print(" ");
+  }
+}
+
+void printWrappedTodoItem(String line) {
+  bool done = false;
+
+  line.trim();
+
+  if (line.startsWith("[x]") || line.startsWith("[X]")) {
+    done = true;
+    line = line.substring(3);
+    line.trim();
+  }
+  else if (line.startsWith("[ ]")) {
+    done = false;
+    line = line.substring(3);
+    line.trim();
+  }
+
+  if (line.length() == 0) {
+    printerTodoCheckbox(done);
+    Printer.println();
+    return;
+  }
+
+  const int textWidth = PRINT_WIDTH - TODO_TEXT_START_COL;
+  bool firstLine = true;
+
+  while (line.length() > 0) {
+    String part;
+
+    if (line.length() <= textWidth) {
+      part = line;
+      line = "";
+    } else {
+      int breakPos = -1;
+
+      // Möglichst am Leerzeichen umbrechen
+      for (int i = textWidth; i >= 6; i--) {
+        if (line.charAt(i) == ' ') {
+          breakPos = i;
+          break;
+        }
+      }
+
+      // Falls kein Leerzeichen gefunden wurde, hart umbrechen
+      if (breakPos == -1) {
+        breakPos = textWidth;
+      }
+
+      part = line.substring(0, breakPos);
+      line = line.substring(breakPos);
+      line.trim();
+    }
+
+    if (firstLine) {
+      printerTodoCheckbox(done);
+      Printer.println(part);
+      firstLine = false;
+    } else {
+      printerPrintSpaces(TODO_TEXT_START_COL);
+      Printer.println(part);
+    }
+  }
 }
 
 // ============================================================
@@ -353,21 +408,17 @@ void printFormattedText(String payload) {
 //
 // #TITLE Daily ToDo
 // #PERSON Lukas Müller
+// #DATE_LINE Montag, den 22.06.26
 // Aufgabe 1
 // [x] Aufgabe 2
 // Aufgabe 3
-//
-// Format:
-// Daily ToDo groß, zentriert, fett
-// Person klein, zentriert, fett
-// Datum/Uhrzeit klein, zentriert, nicht fett
-// Aufgaben klein, links, nicht fett
 
 void printTodoList(String payload) {
   payload = normalizeTextForPrinter(payload);
 
   String title = "Daily ToDo";
   String person = "Lukas Mueller";
+  String dateLine = "";
   String lines = "";
 
   int start = 0;
@@ -390,6 +441,10 @@ void printTodoList(String payload) {
       person = line.substring(8);
       person.trim();
     }
+    else if (line.startsWith("#DATE_LINE ")) {
+      dateLine = line.substring(11);
+      dateLine.trim();
+    }
     else if (line.length() > 0) {
       lines += line;
       lines += "\n";
@@ -399,6 +454,7 @@ void printTodoList(String payload) {
   }
 
   printerInit();
+  printerLineSpacingDefault();
 
   // ------------------------------------------------------------
   // Kopf: Daily ToDo groß, zentriert, fett
@@ -408,7 +464,7 @@ void printTodoList(String payload) {
   printerTextSize(0x11);
   Printer.println(title);
 
-  // Nach der Überschrift sofort sicher auf Normalgröße zurücksetzen
+  // Nach Überschrift sicher zurück auf normal
   printerTextSize(0x00);
   printerBold(false);
   Printer.println();
@@ -422,19 +478,23 @@ void printTodoList(String payload) {
   Printer.println(person);
 
   // ------------------------------------------------------------
-  // Datum/Uhrzeit: klein, zentriert, nicht fett
+  // Listen-Datum: klein, zentriert, nicht fett
   // ------------------------------------------------------------
   printerTextSize(0x00);
   printerBold(false);
   printerAlign(1);
-  Printer.println(getGermanDateTimeLine());
+
+  if (dateLine.length() > 0) {
+    Printer.println(dateLine);
+  }
+
   Printer.println();
 
   // ------------------------------------------------------------
-  // ToDo-Liste: klein, links, nicht fett
+  // ToDo-Liste: normal, links, großer Zeilenabstand
   // ------------------------------------------------------------
   printerResetTextStyle();
-  printerLine();
+  printerLineSpacing(TODO_LINE_SPACING);
 
   start = 0;
 
@@ -449,35 +509,20 @@ void printTodoList(String payload) {
     line.trim();
 
     if (line.length() > 0) {
-      // Vor jeder Aufgabe sicherstellen, dass kein Groß/Fett aktiv ist.
       printerResetTextStyle();
-
-      if (
-        line.startsWith("[ ]") ||
-        line.startsWith("[x]") ||
-        line.startsWith("[X]")
-      ) {
-        Printer.println(line);
-      } else {
-        Printer.print(TODO_CHECKBOX);
-        Printer.println(line);
-      }
+      printerLineSpacing(TODO_LINE_SPACING);
+      printWrappedTodoItem(line);
     }
 
     start = end + 1;
   }
 
+  // Am Ende wieder Standard setzen
+  printerLineSpacingDefault();
   printerResetTextStyle();
-  printerLine();
-  Printer.println();
 
-  // Fußzeile
-  printerAlign(1);
-  printerBold(false);
-  printerTextSize(0x00);
-  Printer.println("Gedruckt via Home Assistant");
-
-  printerResetTextStyle();
+  // Keine untere Linie, kein Footer.
+  // Nur Papier vorschieben.
   printerFeed(4);
 }
 
@@ -487,6 +532,7 @@ void printTodoList(String payload) {
 
 void printTestPage() {
   printerInit();
+  printerLineSpacingDefault();
 
   printerAlign(1);
   printerBold(true);
@@ -496,9 +542,6 @@ void printTestPage() {
 
   printerTextSize(0x00);
   printerBold(false);
-  Printer.println();
-
-  Printer.println(getGermanDateTimeLine());
   Printer.println();
 
   printerResetTextStyle();
@@ -533,11 +576,15 @@ void printTestPage() {
   Printer.println();
 
   printerBold(true);
-  Printer.println("Checkbox:");
+  Printer.println("ToDo-Test:");
   printerBold(false);
-  Printer.print(TODO_CHECKBOX);
-  printerPrintlnNormalized("Ölstand prüfen");
 
+  printerLineSpacing(TODO_LINE_SPACING);
+  printWrappedTodoItem("Ölstand prüfen");
+  printWrappedTodoItem("Das ist eine sehr lange Aufgabe die automatisch umbrechen soll");
+  printWrappedTodoItem("[x] Diese Aufgabe ist erledigt");
+
+  printerLineSpacingDefault();
   printerResetTextStyle();
   printerFeed(4);
 }
@@ -611,6 +658,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Initialisiere Drucker...");
     printerInit();
     printerResetTextStyle();
+    printerLineSpacingDefault();
     publishStatus("printer_initialized");
   }
 }
@@ -714,9 +762,9 @@ void setup() {
 
   printerInit();
   printerResetTextStyle();
+  printerLineSpacingDefault();
 
   connectWiFi();
-  setupTime();
 
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
