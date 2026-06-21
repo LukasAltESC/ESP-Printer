@@ -1,0 +1,25 @@
+HardwareSerial Printer(2);
+
+static const int PRINTER_RX = 16; // ESP32 RX2, kommt vom Drucker TX über MAX3232
+static const int PRINTER_TX = 17; // ESP32 TX2, geht zum Drucker RX über MAX3232
+
+void setup() {
+  Serial.begin(115200);
+
+  // QR701: 9600 Baud, 8 Datenbits, keine Parität, 1 Stopbit
+  Printer.begin(9600, SERIAL_8N1, PRINTER_RX, PRINTER_TX);
+
+  delay(1000);
+
+  Printer.println("QR701 Test");
+  Printer.println("ESP32 + MAX3232");
+  Printer.println("9600 Baud RS232");
+  Printer.println();
+  Printer.println();
+  Printer.println();
+
+  Serial.println("Gesendet.");
+}
+
+void loop() {
+}
