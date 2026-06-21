@@ -11,15 +11,15 @@ rest_command:
         "filter": {
           "and": [
             {
-              "property": "Erledigt",
-              "checkbox": {
-                "equals": false
+              "property": "Date",
+              "date": {
+                "equals": "{{ now().strftime('%Y-%m-%d') }}"
               }
             },
             {
-              "property": "Datum",
-              "date": {
-                "equals": "{{ now().strftime('%Y-%m-%d') }}"
+              "property": "Status",
+              "checkbox": {
+                "equals": false
               }
             }
           ]
@@ -46,7 +46,7 @@ script:
             {% set items = notion_response.content.results %}
             {% if items | count > 0 %}
             {% for item in items %}
-            {{ item.properties['Name der Aufgabe'].title[0].plain_text }}
+            {{ item.properties['Task Name'].title[0].plain_text }}
             {% endfor %}
             {% else %}
             Keine Aufgaben fuer heute.
@@ -54,3 +54,5 @@ script:
             {% else %}
             Notion Fehler: {{ notion_response.status }}
             {% endif %}
+
+            
