@@ -1,0 +1,76 @@
+#include <Arduino.h>
+
+HardwareSerial Printer(2);
+
+static const int PRINTER_RX = 16;
+static const int PRINTER_TX = 17;
+
+void printEscPosTest() {
+  // Init
+  Printer.write(0x1B);
+  Printer.write('@');
+
+  // Zentriert
+  Printer.write(0x1B);
+  Printer.write('a');
+  Printer.write(1);
+
+  Printer.println("QR701 ESC/POS Test");
+
+  // Linksbuendig
+  Printer.write(0x1B);
+  Printer.write('a');
+  Printer.write(0);
+
+  Printer.println("------------------------");
+
+  // Fett an
+  Printer.write(0x1B);
+  Printer.write('E');
+  Printer.write(1);
+  Printer.println("Fett EIN");
+
+  // Fett aus
+  Printer.write(0x1B);
+  Printer.write('E');
+  Printer.write(0);
+  Printer.println("Fett AUS");
+
+  // Doppelte Groesse
+  Printer.write(0x1D);
+  Printer.write('!');
+  Printer.write(0x11);
+  Printer.println("Gross");
+
+  // Normale Groesse
+  Printer.write(0x1D);
+  Printer.write('!');
+  Printer.write(0x00);
+
+  Printer.println("Normaler Text");
+  Printer.println("Umlaute Test: ae oe ue ss");
+  Printer.println();
+
+  // Papier vorschieben
+  Printer.write(0x1B);
+  Printer.write('d');
+  Printer.write(4);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println("ESP32 gestartet");
+
+  Printer.begin(9600, SERIAL_8N1, PRINTER_RX, PRINTER_TX);
+
+  delay(500);
+
+  printEscPosTest();
+
+  Serial.println("ESC/POS Test gesendet");
+}
+
+void loop() {
+}
