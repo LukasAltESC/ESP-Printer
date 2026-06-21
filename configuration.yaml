@@ -32,10 +32,22 @@ rest_command:
 
 script:
   qr701_notion_daily_todo_test:
-    alias: QR701 Notion Daily ToDo Test
+    alias: QR701 Notion ToDo drucken
     mode: single
 
     fields:
+      list_day:
+        name: Liste
+        description: Welche ToDo-Liste soll gedruckt werden?
+        default: today
+        selector:
+          select:
+            options:
+              - label: Heute
+                value: today
+              - label: Morgen
+                value: tomorrow
+
       include_done:
         name: Erledigte Aufgaben mitdrucken
         description: Wenn aktiv, werden auch Aufgaben mit aktivierter Status-Checkbox gedruckt.
@@ -45,11 +57,21 @@ script:
 
     sequence:
       - variables:
+          list_day_value: "{{ list_day | default('today') }}"
           include_done_value: "{{ include_done | default(false) | bool }}"
+          offset_days: "{{ 1 if list_day_value == 'tomorrow' else 0 }}"
+          target_ts: "{{ as_timestamp(now()) + ((1 if list_day_value == 'tomorrow' else 0) * 86400) }}"
+          query_date: "{{ target_ts | timestamp_custom('%Y-%m-%d', true) }}"
+          weekday_index: "{{ target_ts | timestamp_custom('%w', true) | int }}"
+          weekday_name: >
+            {{ ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'][weekday_index | int] }}
+          date_line: >
+            {{ weekday_name }}, den {{ target_ts | timestamp_custom('%d.%m.%y', true) }}
 
-      - action: rest_command.notion_qr701_today_todos
+      - action: rest_command.notion_qr701_todos_by_date
         data:
           data_source_id: !secret notion_data_source_id
+          query_date: "{{ query_date }}"
           include_done: "{{ include_done_value }}"
         response_variable: notion_response
 
@@ -59,6 +81,7 @@ script:
           payload: |
             #TITLE Daily ToDo
             #PERSON Lukas Müller
+            #DATE_LINE {{ date_line }}
             {% if notion_response.status == 200 %}
             {% set items = notion_response.content.results %}
             {% if items | count > 0 %}
@@ -72,7 +95,7 @@ script:
             {% endif %}
             {% endfor %}
             {% else %}
-            Keine Aufgaben fuer heute.
+            Keine Aufgaben fuer diesen Tag.
             {% endif %}
             {% else %}
             Notion Fehler: {{ notion_response.status }}
