@@ -54,9 +54,11 @@ static const uint32_t PRINTER_BAUD = 9600;
 // 58-mm-Drucker, normaler Font: ca. 32 Zeichen pro Zeile
 static const int PRINT_WIDTH = 32;
 
-// ToDo-Zeilenabstand.
-// Standard ist ungefähr 30. 60 ist etwa doppelt so luftig.
-static const uint8_t TODO_LINE_SPACING = 60;
+// Abstand zwischen einzelnen Aufgaben
+static const uint8_t TODO_ITEM_SPACING = 20;
+
+// Abstand innerhalb einer umgebrochenen Aufgabe
+static const uint8_t TODO_WRAP_SPACING = 5;
 
 // Der Text soll bei Zeilenumbruch nicht unter dem Kästchen starten.
 // Das echte Kästchen ist ungefähr 2 Zeichen breit plus Leerzeichen.
@@ -272,8 +274,8 @@ void executeFormattedCommand(String line) {
       spacing = line.substring(spacePos + 1).toInt();
     }
 
-    if (spacing < 16) {
-      spacing = 16;
+    if (spacing < 5) {
+      spacing = 5;
     }
 
     if (spacing > 100) {
@@ -355,6 +357,7 @@ void printWrappedTodoItem(String line) {
   }
 
   if (line.length() == 0) {
+    printerLineSpacing(TODO_ITEM_SPACING);
     printerTodoCheckbox(done);
     Printer.println();
     return;
@@ -391,14 +394,26 @@ void printWrappedTodoItem(String line) {
     }
 
     if (firstLine) {
+      // Erste Zeile einer Aufgabe:
+      // Abstand zur vorherigen Aufgabe.
+      printerLineSpacing(TODO_ITEM_SPACING);
+
       printerTodoCheckbox(done);
       Printer.println(part);
       firstLine = false;
     } else {
+      // Folgezeilen derselben Aufgabe:
+      // Kleiner Abstand, damit es optisch zusammengehört.
+      printerLineSpacing(TODO_WRAP_SPACING);
+
       printerPrintSpaces(TODO_TEXT_START_COL);
       Printer.println(part);
     }
   }
+
+  // Nach der Aufgabe wieder auf Aufgaben-Abstand setzen,
+  // damit die nächste Aufgabe sauber abgesetzt wird.
+  printerLineSpacing(TODO_ITEM_SPACING);
 }
 
 // ============================================================
@@ -491,10 +506,10 @@ void printTodoList(String payload) {
   Printer.println();
 
   // ------------------------------------------------------------
-  // ToDo-Liste: normal, links, großer Zeilenabstand
+  // ToDo-Liste: normal, links, angepasster Zeilenabstand
   // ------------------------------------------------------------
   printerResetTextStyle();
-  printerLineSpacing(TODO_LINE_SPACING);
+  printerLineSpacing(TODO_ITEM_SPACING);
 
   start = 0;
 
@@ -510,7 +525,7 @@ void printTodoList(String payload) {
 
     if (line.length() > 0) {
       printerResetTextStyle();
-      printerLineSpacing(TODO_LINE_SPACING);
+      printerLineSpacing(TODO_ITEM_SPACING);
       printWrappedTodoItem(line);
     }
 
@@ -579,7 +594,7 @@ void printTestPage() {
   Printer.println("ToDo-Test:");
   printerBold(false);
 
-  printerLineSpacing(TODO_LINE_SPACING);
+  printerLineSpacing(TODO_ITEM_SPACING);
   printWrappedTodoItem("Ölstand prüfen");
   printWrappedTodoItem("Das ist eine sehr lange Aufgabe die automatisch umbrechen soll");
   printWrappedTodoItem("[x] Diese Aufgabe ist erledigt");
