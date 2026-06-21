@@ -215,6 +215,40 @@ String getDateTimeString() {
   return String(buffer);
 }
 
+String getGermanDateTimeLine() {
+  struct tm timeinfo;
+
+  if (!getLocalTime(&timeinfo)) {
+    return "Datum/Zeit unbekannt";
+  }
+
+  const char* weekdays[] = {
+    "Sonntag",
+    "Montag",
+    "Dienstag",
+    "Mittwoch",
+    "Donnerstag",
+    "Freitag",
+    "Samstag"
+  };
+
+  char buffer[64];
+
+  snprintf(
+    buffer,
+    sizeof(buffer),
+    "%s, den %02d.%02d.%02d %02d:%02d Uhr",
+    weekdays[timeinfo.tm_wday],
+    timeinfo.tm_mday,
+    timeinfo.tm_mon + 1,
+    (timeinfo.tm_year + 1900) % 100,
+    timeinfo.tm_hour,
+    timeinfo.tm_min
+  );
+
+  return String(buffer);
+}
+
 // ============================================================
 // NORMALER TEXTDRUCK
 // ============================================================
@@ -278,7 +312,7 @@ void executeFormattedCommand(String line) {
     printerLine();
   }
   else if (line == "#DATETIME") {
-    Printer.println(getDateTimeString());
+    Printer.println(getGermanDateTimeLine());
   }
   else if (line.startsWith("#FEED")) {
     int spacePos = line.indexOf(' ');
@@ -330,30 +364,35 @@ void printFormattedText(String payload) {
     start = end + 1;
   }
 
+  printerTextSize(0x00);
+  printerBold(false);
+  printerAlign(0);
+
   printerFeed(4);
 }
 
 // ============================================================
 // TODO-DRUCK
 // ============================================================
-// Payload-Variante 1:
-//
-// Oelstand pruefen
-// E-Mails beantworten
-// Pruefstand aufraeumen
-//
-// Payload-Variante 2 mit eigener Überschrift:
+// Payload-Beispiel:
 //
 // #TITLE Daily ToDo
-// Oelstand pruefen
-// E-Mails beantworten
+// #PERSON Lukas Müller
+// Aufgabe 1
+// [x] Aufgabe 2
+// Aufgabe 3
 //
-// Wenn kein #TITLE gesetzt ist, wird keine feste Überschrift gedruckt.
+// Format:
+// Daily ToDo groß, zentriert, fett
+// Person klein, zentriert, fett
+// Datum/Uhrzeit klein, zentriert
+// Aufgaben klein, links, nicht fett
 
 void printTodoList(String payload) {
   payload = normalizeTextForPrinter(payload);
 
-  String title = "";
+  String title = "Daily ToDo";
+  String person = "Lukas Mueller";
   String lines = "";
 
   int start = 0;
@@ -372,6 +411,10 @@ void printTodoList(String payload) {
       title = line.substring(7);
       title.trim();
     }
+    else if (line.startsWith("#PERSON ")) {
+      person = line.substring(8);
+      person.trim();
+    }
     else if (line.length() > 0) {
       lines += line;
       lines += "\n";
@@ -382,21 +425,36 @@ void printTodoList(String payload) {
 
   printerInit();
 
-  if (title.length() > 0) {
-    printerAlign(1);
-    printerBold(true);
-    printerTextSize(0x11);
-    Printer.println(title);
-
-    printerTextSize(0x00);
-    printerBold(false);
-    Printer.println();
-  }
-
+  // ------------------------------------------------------------
+  // Kopf: Daily ToDo groß, zentriert, fett
+  // ------------------------------------------------------------
   printerAlign(1);
-  Printer.println(getDateTimeString());
+  printerBold(true);
+  printerTextSize(0x11);
+  Printer.println(title);
+
+  // ------------------------------------------------------------
+  // Name: klein, zentriert, fett
+  // ------------------------------------------------------------
+  printerTextSize(0x00);
+  printerBold(true);
+  printerAlign(1);
+  Printer.println(person);
+
+  // ------------------------------------------------------------
+  // Datum/Uhrzeit: klein, zentriert, nicht fett
+  // ------------------------------------------------------------
+  printerTextSize(0x00);
+  printerBold(false);
+  printerAlign(1);
+  Printer.println(getGermanDateTimeLine());
   Printer.println();
 
+  // ------------------------------------------------------------
+  // ToDo-Liste: klein, links, nicht fett
+  // ------------------------------------------------------------
+  printerTextSize(0x00);
+  printerBold(false);
   printerAlign(0);
   printerLine();
 
@@ -431,8 +489,16 @@ void printTodoList(String payload) {
   printerLine();
   Printer.println();
 
+  // Fußzeile
+  printerTextSize(0x00);
+  printerBold(false);
   printerAlign(1);
   Printer.println("Gedruckt via Home Assistant");
+
+  // Am Ende sicher wieder auf Standard
+  printerTextSize(0x00);
+  printerBold(false);
+  printerAlign(0);
 
   printerFeed(4);
 }
@@ -454,7 +520,7 @@ void printTestPage() {
   printerBold(false);
   Printer.println();
 
-  Printer.println(getDateTimeString());
+  Printer.println(getGermanDateTimeLine());
   Printer.println();
 
   printerAlign(0);
@@ -492,7 +558,7 @@ void printTestPage() {
   Printer.println("Checkbox:");
   printerBold(false);
   Printer.print(TODO_CHECKBOX);
-  printerPrintlnNormalized("Oelstand prüfen");
+  printerPrintlnNormalized("Ölstand prüfen");
 
   printerFeed(4);
 }
