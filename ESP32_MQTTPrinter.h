@@ -55,9 +55,6 @@ static const int PRINTER_TX = 17;
 // QR701 laut Testdruck
 static const uint32_t PRINTER_BAUD = 9600;
 
-// 58-mm-Drucker, normaler Font: ca. 32 Zeichen pro Zeile
-static const int PRINT_WIDTH = 32;
-
 // Kleine originale Checkbox
 const char* TODO_CHECKBOX = "[ ] ";
 
@@ -98,6 +95,9 @@ String normalizeTextForPrinter(String text) {
   text.replace("’", "'");
   text.replace("‘", "'");
   text.replace("…", "...");
+
+  // Nicht druckbare Steuerzeichen entschärfen, aber Zeilenumbrüche erhalten
+  text.replace("\r", "");
 
   return text;
 }
@@ -141,6 +141,12 @@ void printerFeed(uint8_t lines) {
 
 void printerLine() {
   Printer.println("--------------------------------");
+}
+
+void printerResetTextStyle() {
+  printerTextSize(0x00);
+  printerBold(false);
+  printerAlign(0);
 }
 
 void printerPrintNormalized(String text) {
@@ -192,29 +198,6 @@ void setupTime() {
   Serial.println("Warnung: Uhrzeit konnte nicht synchronisiert werden.");
 }
 
-String getDateTimeString() {
-  struct tm timeinfo;
-
-  if (!getLocalTime(&timeinfo)) {
-    return "Datum/Zeit unbekannt";
-  }
-
-  char buffer[32];
-
-  snprintf(
-    buffer,
-    sizeof(buffer),
-    "%02d.%02d.%04d  %02d:%02d",
-    timeinfo.tm_mday,
-    timeinfo.tm_mon + 1,
-    timeinfo.tm_year + 1900,
-    timeinfo.tm_hour,
-    timeinfo.tm_min
-  );
-
-  return String(buffer);
-}
-
 String getGermanDateTimeLine() {
   struct tm timeinfo;
 
@@ -255,14 +238,12 @@ String getGermanDateTimeLine() {
 
 void printPlainText(String text) {
   printerInit();
-
-  printerAlign(0);
-  printerBold(false);
-  printerTextSize(0x00);
+  printerResetTextStyle();
 
   text = normalizeTextForPrinter(text);
   Printer.println(text);
 
+  printerResetTextStyle();
   printerFeed(4);
 }
 
@@ -338,10 +319,7 @@ void printFormattedText(String payload) {
   payload = normalizeTextForPrinter(payload);
 
   printerInit();
-
-  printerAlign(0);
-  printerBold(false);
-  printerTextSize(0x00);
+  printerResetTextStyle();
 
   int start = 0;
 
@@ -364,10 +342,7 @@ void printFormattedText(String payload) {
     start = end + 1;
   }
 
-  printerTextSize(0x00);
-  printerBold(false);
-  printerAlign(0);
-
+  printerResetTextStyle();
   printerFeed(4);
 }
 
@@ -385,7 +360,7 @@ void printFormattedText(String payload) {
 // Format:
 // Daily ToDo groß, zentriert, fett
 // Person klein, zentriert, fett
-// Datum/Uhrzeit klein, zentriert
+// Datum/Uhrzeit klein, zentriert, nicht fett
 // Aufgaben klein, links, nicht fett
 
 void printTodoList(String payload) {
@@ -433,12 +408,17 @@ void printTodoList(String payload) {
   printerTextSize(0x11);
   Printer.println(title);
 
+  // Nach der Überschrift sofort sicher auf Normalgröße zurücksetzen
+  printerTextSize(0x00);
+  printerBold(false);
+  Printer.println();
+
   // ------------------------------------------------------------
   // Name: klein, zentriert, fett
   // ------------------------------------------------------------
+  printerAlign(1);
   printerTextSize(0x00);
   printerBold(true);
-  printerAlign(1);
   Printer.println(person);
 
   // ------------------------------------------------------------
@@ -453,9 +433,7 @@ void printTodoList(String payload) {
   // ------------------------------------------------------------
   // ToDo-Liste: klein, links, nicht fett
   // ------------------------------------------------------------
-  printerTextSize(0x00);
-  printerBold(false);
-  printerAlign(0);
+  printerResetTextStyle();
   printerLine();
 
   start = 0;
@@ -471,6 +449,9 @@ void printTodoList(String payload) {
     line.trim();
 
     if (line.length() > 0) {
+      // Vor jeder Aufgabe sicherstellen, dass kein Groß/Fett aktiv ist.
+      printerResetTextStyle();
+
       if (
         line.startsWith("[ ]") ||
         line.startsWith("[x]") ||
@@ -486,20 +467,17 @@ void printTodoList(String payload) {
     start = end + 1;
   }
 
+  printerResetTextStyle();
   printerLine();
   Printer.println();
 
   // Fußzeile
-  printerTextSize(0x00);
-  printerBold(false);
   printerAlign(1);
+  printerBold(false);
+  printerTextSize(0x00);
   Printer.println("Gedruckt via Home Assistant");
 
-  // Am Ende sicher wieder auf Standard
-  printerTextSize(0x00);
-  printerBold(false);
-  printerAlign(0);
-
+  printerResetTextStyle();
   printerFeed(4);
 }
 
@@ -523,7 +501,7 @@ void printTestPage() {
   Printer.println(getGermanDateTimeLine());
   Printer.println();
 
-  printerAlign(0);
+  printerResetTextStyle();
   printerLine();
   Printer.println("ESP32 + MAX3232");
   Printer.println("Home Assistant MQTT");
@@ -560,6 +538,7 @@ void printTestPage() {
   Printer.print(TODO_CHECKBOX);
   printerPrintlnNormalized("Ölstand prüfen");
 
+  printerResetTextStyle();
   printerFeed(4);
 }
 
@@ -586,7 +565,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println();
   Serial.print("MQTT Nachricht empfangen auf Topic: ");
   Serial.println(topic);
-  Serial.print("Payload: ");
+  Serial.print("Payload:");
+  Serial.println();
   Serial.println(message);
 
   String topicString = String(topic);
@@ -630,6 +610,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   else if (topicString == TOPIC_CMD_INIT) {
     Serial.println("Initialisiere Drucker...");
     printerInit();
+    printerResetTextStyle();
     publishStatus("printer_initialized");
   }
 }
@@ -732,6 +713,7 @@ void setup() {
   Printer.begin(PRINTER_BAUD, SERIAL_8N1, PRINTER_RX, PRINTER_TX);
 
   printerInit();
+  printerResetTextStyle();
 
   connectWiFi();
   setupTime();
