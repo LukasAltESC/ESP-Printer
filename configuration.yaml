@@ -15,13 +15,16 @@ rest_command:
               "date": {
                 "equals": "{{ now().strftime('%Y-%m-%d') }}"
               }
-            },
+            }
+            {% if not include_done | default(false) | bool %}
+            ,
             {
               "property": "Status",
               "checkbox": {
                 "equals": false
               }
             }
+            {% endif %}
           ]
         },
         "page_size": 50
@@ -31,10 +34,23 @@ script:
   qr701_notion_daily_todo_test:
     alias: QR701 Notion Daily ToDo Test
     mode: single
+
+    fields:
+      include_done:
+        name: Erledigte Aufgaben mitdrucken
+        description: Wenn aktiv, werden auch Aufgaben mit aktivierter Status-Checkbox gedruckt.
+        default: false
+        selector:
+          boolean:
+
     sequence:
+      - variables:
+          include_done_value: "{{ include_done | default(false) | bool }}"
+
       - action: rest_command.notion_qr701_today_todos
         data:
           data_source_id: !secret notion_data_source_id
+          include_done: "{{ include_done_value }}"
         response_variable: notion_response
 
       - action: mqtt.publish
@@ -42,11 +58,18 @@ script:
           topic: qr701/print/todo
           payload: >-
             #TITLE Daily ToDo
+            #PERSON Lukas Müller
             {% if notion_response.status == 200 %}
             {% set items = notion_response.content.results %}
             {% if items | count > 0 %}
             {% for item in items %}
-            {{ item.properties['Task Name'].title[0].plain_text }}
+            {% set done = item.properties['Status'].checkbox %}
+            {% set title = item.properties['Task Name'].title[0].plain_text %}
+            {% if done %}
+            [x] {{ title }}
+            {% else %}
+            {{ title }}
+            {% endif %}
             {% endfor %}
             {% else %}
             Keine Aufgaben fuer heute.
@@ -54,5 +77,3 @@ script:
             {% else %}
             Notion Fehler: {{ notion_response.status }}
             {% endif %}
-
-            
